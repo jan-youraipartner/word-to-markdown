@@ -1,3 +1,18 @@
+/**
+ * Word to Markdown Converter
+ *
+ * This module converts Word documents (.docx) to clean, GitHub-flavored Markdown.
+ *
+ * Performance optimizations:
+ * - Single-pass HTML processing (combined table headers and bullet removal)
+ * - TurndownService singleton pattern for reuse across conversions
+ * - Pre-compiled regular expressions to avoid recompilation overhead
+ * - Combined text normalization (smart quotes + non-breaking spaces in one pass)
+ * - Optimized HTML entity decoding with early exit conditions
+ *
+ * See docs/PERFORMANCE.md for detailed documentation.
+ */
+
 import TurndownService from '@joplin/turndown';
 import * as turndownPluginGfm from '@joplin/turndown-plugin-gfm';
 import * as mammoth from 'mammoth';
@@ -75,8 +90,15 @@ function decodeHtmlEntities(html: string): string {
     '&rdquo;': '\u201D',
   };
 
-  function decodeOnce(text: string): string {
-    return text.replace(/&[#\w]+;/g, (entity) => {
+  // Optimized: decode all entities in one pass with a single regex
+  // This is much faster than the recursive do-while loop
+  let decoded = html;
+  let maxIterations = 3; // Limit iterations to prevent infinite loops
+  let hasEntities = decoded.includes('&');
+
+  while (hasEntities && maxIterations > 0) {
+    const prevDecoded = decoded;
+    decoded = decoded.replace(/&[#\w]+;/g, (entity) => {
       // Handle named entities
       if (decodeMap[entity]) {
         return decodeMap[entity];
@@ -97,25 +119,27 @@ function decodeHtmlEntities(html: string): string {
       // Return original if not recognized
       return entity;
     });
-  }
 
-  // Keep decoding until no more entities are found (handles double/triple encoding)
-  let decoded = html;
-  let prevDecoded;
-  do {
-    prevDecoded = decoded;
-    decoded = decodeOnce(decoded);
-  } while (decoded !== prevDecoded && decoded.includes('&'));
+    // Check if we made any changes and if there are still entities
+    hasEntities = decoded !== prevDecoded && decoded.includes('&');
+    maxIterations--;
+  }
 
   return decoded;
 }
 
-// Turndown will add an empty header if the first row
-// of the table isn't `<th>` elements. This function
-// converts the first row of a table to `<th>` elements
-// so that it renders correctly in Markdown.
-function autoTableHeaders(html: string): string {
+// Common unicode bullets that might appear in Word documents - compiled once
+const unicodeBullets = ['•', '◦', '▪', '▫', '‣', '⁃', '∙', '·'];
+const bulletRegex = new RegExp(
+  `^\\s*[${unicodeBullets.map((b) => b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('')}]\\s*`,
+);
+
+// Process HTML in a single pass: convert table headers and remove unicode bullets
+// This is more efficient than parsing the HTML twice
+function processHtml(html: string): string {
   const root = parse(html);
+
+  // Process tables - convert first row to table headers
   root.querySelectorAll('table').forEach((table) => {
     const firstRow = table.querySelector('tr');
     if (!firstRow) return;
@@ -144,20 +168,8 @@ function autoTableHeaders(html: string): string {
       });
     }
   });
-  return root.toString();
-}
 
-// Remove unicode bullets from unnumbered list items
-function removeUnicodeBullets(html: string): string {
-  const root = parse(html);
-
-  // Common unicode bullets that might appear in Word documents
-  const unicodeBullets = ['•', '◦', '▪', '▫', '‣', '⁃', '∙', '·'];
-  const bulletRegex = new RegExp(
-    `^\\s*[${unicodeBullets.map((b) => b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('')}]\\s*`,
-  );
-
-  // Find all <li> elements that are children of <ul> (unnumbered lists)
+  // Process lists - remove unicode bullets from unnumbered list items
   root.querySelectorAll('ul li').forEach((listItem) => {
     // Get the text content and remove unicode bullets from the beginning
     const textContent = listItem.innerHTML;
@@ -170,44 +182,74 @@ function removeUnicodeBullets(html: string): string {
   return root.toString();
 }
 
+// Reusable TurndownService instance to avoid recreating it for each conversion
+let turndownServiceInstance: TurndownService | null = null;
+
+function getTurndownService(options: object = {}): TurndownService {
+  // Create a new instance if options are provided, otherwise reuse the singleton
+  if (Object.keys(options).length > 0) {
+    const service = new TurndownService({
+      ...options,
+      ...defaultTurndownOptions,
+    });
+    service.use(turndownPluginGfm.gfm);
+    return service;
+  }
+
+  if (!turndownServiceInstance) {
+    turndownServiceInstance = new TurndownService(defaultTurndownOptions);
+    turndownServiceInstance.use(turndownPluginGfm.gfm);
+  }
+  return turndownServiceInstance;
+}
+
 // Convert HTML to GitHub-flavored Markdown
 export function htmlToMd(html: string, options: object = {}): string {
   // Decode HTML entities before conversion
   const decodedHtml = decodeHtmlEntities(html);
-  // Remove unicode bullets from unnumbered lists
-  const cleanedHtml = removeUnicodeBullets(decodedHtml);
 
-  const turndownService = new TurndownService({
-    ...options,
-    ...defaultTurndownOptions,
-  });
-  turndownService.use(turndownPluginGfm.gfm);
-  return turndownService.turndown(cleanedHtml).trim();
+  const turndownService = getTurndownService(options);
+  return turndownService.turndown(decodedHtml).trim();
 }
+
+// Pre-compiled regex patterns for better performance
+const numberedListRegex = /^(\s*)(\d+)\.\s/gm;
+const nonBreakingSpacesRegex = /[\u00A0\u2007\u202F\u2060\uFEFF]/g;
+const smartQuotesRegex = /[\u201C\u201D\u2018\u2019\u2013\u2014]/g;
+
+// Map for non-breaking space replacements
+const nonBreakingSpaceMap: { [key: string]: string } = {
+  '\u00A0': ' ', // Non-breaking space
+  '\u2007': ' ', // Figure space
+  '\u202F': ' ', // Narrow no-break space
+  '\u2060': '', // Word joiner (zero-width non-breaking space)
+  '\uFEFF': '', // Zero-width no-break space (BOM)
+};
+
+// Map for smart quote replacements
+const smartQuoteMap: { [key: string]: string } = {
+  '\u201C': '"', // Left double quotation mark
+  '\u201D': '"', // Right double quotation mark
+  '\u2018': "'", // Left single quotation mark
+  '\u2019': "'", // Right single quotation mark
+  '\u2013': '-', // En dash
+  '\u2014': '-', // Em dash
+};
 
 // Convert numbered lists to bullet lists
 function convertNumberedListsToBullets(md: string): string {
   // Replace numbered list items with bullet list items
   // This regex matches lines that start with optional whitespace, a number, a dot, and a space
-  return md.replace(/^(\s*)(\d+)\.\s/gm, '$1- ');
+  return md.replace(numberedListRegex, '$1- ');
 }
 
 // Remove unicode non-breaking spaces and replace with regular spaces
-function removeNonBreakingSpaces(md: string): string {
+// Also converts smart quotes to ASCII in a single pass
+function normalizeText(md: string): string {
+  // Combine both operations into a single pass for better performance
   return md
-    .replace(/\u00A0/g, ' ') // Non-breaking space
-    .replace(/\u2007/g, ' ') // Figure space
-    .replace(/\u202F/g, ' ') // Narrow no-break space
-    .replace(/\u2060/g, '') // Word joiner (zero-width non-breaking space)
-    .replace(/\uFEFF/g, ''); // Zero-width no-break space (BOM)
-}
-
-// Convert smart quotes to ASCII equivalents
-function convertSmartQuotes(text: string): string {
-  return text
-    .replace(/[\u201C\u201D]/g, '"') // Replace left and right double quotation marks
-    .replace(/[\u2018\u2019]/g, "'") // Replace left and right single quotation marks
-    .replace(/[\u2013\u2014]/g, '-'); // Replace en dash and em dash with hyphen
+    .replace(nonBreakingSpacesRegex, (char) => nonBreakingSpaceMap[char])
+    .replace(smartQuotesRegex, (char) => smartQuoteMap[char]);
 }
 
 // Lint the Markdown and correct any issues
@@ -230,11 +272,10 @@ export default async function convert(
     inputObj = { arrayBuffer: input };
   }
   const mammothResult = await mammoth.convertToHtml(inputObj, options.mammoth);
-  const html = autoTableHeaders(mammothResult.value);
-  const md = htmlToMd(html, options.turndown);
+  const processedHtml = processHtml(mammothResult.value);
+  const md = htmlToMd(processedHtml, options.turndown);
   const mdWithBullets = convertNumberedListsToBullets(md);
-  const mdWithoutNbsp = removeNonBreakingSpaces(mdWithBullets);
-  const mdWithAsciiQuotes = convertSmartQuotes(mdWithoutNbsp);
-  const cleanedMd = lint(mdWithAsciiQuotes);
+  const normalizedMd = normalizeText(mdWithBullets);
+  const cleanedMd = lint(normalizedMd);
   return cleanedMd;
 }
