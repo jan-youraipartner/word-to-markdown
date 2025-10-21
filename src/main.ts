@@ -1,3 +1,18 @@
+/**
+ * Word to Markdown Converter
+ *
+ * This module converts Word documents (.docx) to clean, GitHub-flavored Markdown.
+ *
+ * Performance optimizations:
+ * - Single-pass HTML processing (combined table headers and bullet removal)
+ * - TurndownService singleton pattern for reuse across conversions
+ * - Pre-compiled regular expressions to avoid recompilation overhead
+ * - Combined text normalization (smart quotes + non-breaking spaces in one pass)
+ * - Optimized HTML entity decoding with early exit conditions
+ *
+ * See docs/PERFORMANCE.md for detailed documentation.
+ */
+
 import TurndownService from '@joplin/turndown';
 import * as turndownPluginGfm from '@joplin/turndown-plugin-gfm';
 import * as mammoth from 'mammoth';
