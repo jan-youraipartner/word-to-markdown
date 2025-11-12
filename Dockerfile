@@ -1,7 +1,6 @@
 FROM node:22
 
 ENV PORT=80
-ENV NODE_ENV=production
 
 EXPOSE ${PORT}
 
@@ -14,5 +13,7 @@ RUN npm install
 COPY . /app/
 
 RUN npm run build
+
+ENV NODE_ENV=production
 
 CMD ["node", "build/server.js"]
