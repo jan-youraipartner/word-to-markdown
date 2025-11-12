@@ -1,6 +1,8 @@
 import express from 'express';
 import multer from 'multer';
 import os from 'os';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import convert, {
   UnsupportedFileError,
   validateFileExtension,
@@ -8,6 +10,9 @@ import convert, {
 import helmet from 'helmet';
 import morgan from 'morgan';
 import { Request } from 'express';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Escapes HTML meta-characters to prevent XSS in error messages
 function escapeHtml(str: string): string {
@@ -25,7 +30,34 @@ const port = process.env.PORT || 3000;
 const upload = multer({ dest: os.tmpdir() });
 app.use(morgan('combined'));
 
-app.use(helmet());
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        styleSrc: [
+          "'self'",
+          "'unsafe-inline'",
+          'https://cdn.jsdelivr.net',
+          'https://fonts.googleapis.com',
+        ],
+        fontSrc: ["'self'", 'https://fonts.gstatic.com'],
+        scriptSrc: ["'self'"],
+        imgSrc: ["'self'", 'data:'],
+        connectSrc: ["'self'"],
+      },
+    },
+  }),
+);
+
+// Serve static files from dist directory
+const distPath = path.join(__dirname, '..', 'dist');
+app.use(express.static(distPath));
+
+// Serve the main HTML file
+app.get('/', (_req, res) => {
+  res.sendFile(path.join(distPath, 'index.html'));
+});
 
 app.post(
   '/raw',
