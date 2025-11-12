@@ -63,6 +63,7 @@ app.get('/', (_req, res) => {
   res.sendFile(indexPath);
 });
 
+// Legacy endpoint - returns plain text
 app.post(
   '/raw',
   upload.single('doc'),
@@ -100,6 +101,76 @@ app.post(
         return;
       }
       throw error;
+    }
+  },
+);
+
+// API endpoint - returns JSON with markdown content
+app.post(
+  '/api/convert',
+  upload.single('file'),
+  async (req: Request & { file: multer.File }, res) => {
+    console.log('API convert request received');
+
+    if (
+      !req.file ||
+      typeof req.file !== 'object' ||
+      !req.file.path ||
+      !req.file.originalname
+    ) {
+      res.status(400).json({
+        success: false,
+        error: 'You must upload a file to convert.',
+        message: 'No file provided in the request.',
+      });
+      return;
+    }
+
+    console.log(`Processing file: ${req.file.originalname}`);
+
+    // Validate file extension
+    if (req.file.originalname) {
+      try {
+        validateFileExtension(req.file.originalname);
+      } catch (error) {
+        if (error instanceof UnsupportedFileError) {
+          res.status(400).json({
+            success: false,
+            error: 'Invalid file type',
+            message: error.message,
+          });
+          return;
+        }
+        throw error;
+      }
+    }
+
+    // Convert to markdown
+    try {
+      const markdown = await convert(req.file.path);
+      res.status(200).json({
+        success: true,
+        markdown: markdown,
+        originalFilename: req.file.originalname,
+        size: req.file.size,
+      });
+      return;
+    } catch (error) {
+      console.error('Conversion error:', error);
+      if (error instanceof UnsupportedFileError) {
+        res.status(400).json({
+          success: false,
+          error: 'Conversion failed',
+          message: error.message,
+        });
+        return;
+      }
+      res.status(500).json({
+        success: false,
+        error: 'Internal server error',
+        message: 'An unexpected error occurred during conversion.',
+      });
+      return;
     }
   },
 );
