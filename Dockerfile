@@ -11,6 +11,8 @@ COPY package.json package-lock.json /app/
 
 RUN npm install
 
-COPY build /app/build/
+COPY . /app/
+
+RUN npm run build
 
 CMD ["node", "build/server.js"]
