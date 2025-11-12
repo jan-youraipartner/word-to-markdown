@@ -8,6 +8,5 @@ README.md
 .idea
 *.md
 build
-dist
 coverage
 .github
