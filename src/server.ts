@@ -52,11 +52,15 @@ app.use(
 
 // Serve static files from dist directory
 const distPath = path.join(__dirname, '..', 'dist');
+console.log(`Serving static files from: ${distPath}`);
+console.log(`Current __dirname: ${__dirname}`);
 app.use(express.static(distPath));
 
 // Serve the main HTML file
 app.get('/', (_req, res) => {
-  res.sendFile(path.join(distPath, 'index.html'));
+  const indexPath = path.join(distPath, 'index.html');
+  console.log(`Serving index.html from: ${indexPath}`);
+  res.sendFile(indexPath);
 });
 
 app.post(
@@ -103,6 +107,12 @@ app.post(
 app.get('/_healthcheck', (_req, res) => {
   res.status(200).send('OK');
   return;
+});
+
+// 404 handler - must be last
+app.use((_req, res) => {
+  console.log(`404 - Path not found: ${_req.path}`);
+  res.status(404).send('Not Found');
 });
 
 app.listen(port, () => {
